@@ -55,7 +55,7 @@ def normalize_image(x):
 def save_model(model, path):
     torch.save(model.state_dict(), path)
 
-def test(model, device, test_loader):
+def test(model, device, test_loader, writer=None):
     correct = 0
     total_loss = 0
     crossentropy = nn.CrossEntropyLoss()
@@ -68,16 +68,12 @@ def test(model, device, test_loader):
             total_loss += crossentropy(out, y).item() # detach the history
             _, pred = torch.max(out.data, 1)
             correct += (pred==y).sum().item()
-
     acc = correct/len(test_loader.dataset)
     loss = total_loss/len(test_loader.dataset)
     return acc, loss
 
-def train(model, device, train_loader, test_loader, optimizer, n_epochs):
+def train(model, device, train_loader, test_loader, optimizer, n_epochs, writer=None):
     crossentropy = nn.CrossEntropyLoss()
-    train_loss = []
-    test_loss = []
-    test_acc = []
     best_acc = 0
 
     for epoch in range(n_epochs):
@@ -92,12 +88,17 @@ def train(model, device, train_loader, test_loader, optimizer, n_epochs):
             train_total_loss += loss.item()
             loss.backward()
             optimizer.step()
-        train_loss.append(train_total_loss / len(train_loader.dataset) )
-        acc, test_loss_ave = test(model, device, test_loader)
-        test_acc.append(acc)
-        test_loss.append(test_loss_ave)
+        train_loss = train_total_loss / len(train_loader.dataset) 
+        acc, test_loss_ave = test(model, device, test_loader, writer=None)
+        if writer:
+            writer.add_scalar('data/loss_train', train_loss, epoch)
+            writer.add_scalar('data/loss_test', test_loss_ave, epoch)
+            writer.add_scalar('data/acc_test', acc, epoch)
+            for name, param in model.named_parameters():
+                writer.add_histogram(name, param.clone().cpu().data.numpy(), epoch)
+            writer.add_embedding(out, metadata=y, label_img=x, global_step=epoch)
         if acc > best_acc:
-            save_model(model, "best")
+            save_model(model, "best.pth")
             best_acc = acc
 
     print("best:", best_acc)
@@ -105,6 +106,11 @@ def train(model, device, train_loader, test_loader, optimizer, n_epochs):
     return train_loss, test_loss, test_acc
 
 def main(args):
+    writer = None
+    if args.tb:
+        from tensorboardX import SummaryWriter
+        writer = SummaryWriter()
+
     mnist_train = MNIST("./mnist", train=True, download=True)
     mnist_test = MNIST("./mnist", train=False, download=True)
 
@@ -131,11 +137,12 @@ def main(args):
     model = model.to(device)
     adam = opt.Adam(model.parameters(), lr=0.00005)
 
-    train_loss, test_loss, test_acc = train(model=model, device=device, train_loader=train_loader, test_loader=test_loader, optimizer=adam, n_epochs=160)
+    train_loss, test_loss, test_acc = train(model=model, device=device, train_loader=train_loader, test_loader=test_loader, optimizer=adam, n_epochs=160, writer=writer)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--nocuda", action="store_true")
+    parser.add_argument("--tb", action="store_true", help="enable tensorboard logging")
 
     args = parser.parse_args()
     main(args)
